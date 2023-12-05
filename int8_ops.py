@@ -1,4 +1,6 @@
 import torch
+import intel_extension_for_pytorch
+
 
 def is_on_cpu(tensors):
     on_cpu = True
@@ -11,6 +13,7 @@ def is_on_cpu(tensors):
             f' {[(t.shape, t.device) if isinstance(t, torch.Tensor) else None for t in tensors]}'
         )
     return on_cpu
+
 
 @torch.compile
 def double_quant(
@@ -49,8 +52,6 @@ def double_quant(
         if row_stats is None or col_stats is None:
             row_stats, col_stats = get_row_col_stats(A)
 
-    # quant_by_row = torch.clamp(torch.round(A / row_stats.unsqueeze(-1) * 127, ), -128, 127)
-    # quant_by_col = torch.clamp(torch.round(A / col_stats.unsqueeze(0) * 127), -128, 127)
     quant_by_row = quant_to_int8(A, row_stats.unsqueeze(-1))
     quant_by_col = quant_to_int8(A, col_stats.unsqueeze(0))
     if out_row is not None:
@@ -62,3 +63,62 @@ def double_quant(
     else:
         out_col = quant_by_col
     return out_row, out_col, row_stats, col_stats, coo_tensor
+
+
+@torch.compile
+def transform(A, to_order=None, from_order='row', out=None, transpose=False, state=None, ld=None):
+    if transpose:
+        if out is not None:
+            out.copy_(A.T)
+        else:
+            out = A.T
+    else:
+        if out is not None:
+            out.copy_(A)
+        else:
+            out = A
+    return out, state
+
+
+def igemmlt(A, B, SA=None, SB=None, out=None, Sout=None, dtype=torch.int32):
+    assert A.device.type == "cpu"
+    assert B.device.type == "cpu"
+    assert A.dtype == torch.int8
+    assert B.dtype == torch.int8
+    if out is not None:
+        assert out.dtype == dtype
+
+    dimsA = A.ndim
+    dimsB = B.ndim
+    shapeA = A.shape
+    shapeB = B.shape
+    assert dimsA in [2, 3], 'Only two or three dimensional matrices are supported for argument A'
+    assert dimsB == 2, 'Only two dimensional matrices are supported for argument B'
+
+    if dimsA == 2:
+        m = shapeA[0]
+    elif dimsA == 3:
+        m = shapeA[0] * shapeA[1]
+    n = shapeB[0]
+    k = shapeA[-1]
+    assert shapeA[-1] == shapeB[-1], f'Shapes of A and B do not match, got {shapeA} and {shapeB}'
+    shapeOut = (shapeA[0], shapeA[1], n) if dimsA == 3 else (m, n)
+
+    # if the tensor is empty, return a transformed empty tensor with the right dimensions
+    if shapeA[0] == 0 and dimsA == 2:
+        return torch.empty((0, n), device=A.device, dtype=A.dtype)
+    elif shapeA[1] == 0 and dimsA == 3:
+        return torch.empty(tuple(shapeA[:2] + [n]), device=A.device, dtype=A.dtype)
+    
+    A_reshaped = A.reshape(m, k)
+
+    C = torch.ops.torch_ipex.matmul_i8i8i32(A_reshaped, B)
+    C = C.to(dtype)
+    if C.ndim != dimsA:
+        C = C.reshape(shapeOut)
+    if out is not None:
+        out.copy_(C)
+    else:
+        out = C
+
+    return out, Sout

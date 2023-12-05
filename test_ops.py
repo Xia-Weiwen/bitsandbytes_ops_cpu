@@ -4,6 +4,8 @@ import sys
 sys.path.append(sys.path[0])
 from int8_ops import (
     double_quant,
+    transform,
+    igemmlt,
 )
 
 
@@ -60,6 +62,36 @@ class Test8bitOps(unittest.TestCase):
         out_row2, out_col2, _, _, _ = double_quant(A, out_row=out_row, out_col=out_col, threshold=threshold)
         assert id(out_row) == id(out_row2)
         assert id(out_col) == id(out_col2)
+
+    def test_transform(self):
+        A = torch.rand(32, 64)
+        B, _ = transform(A)
+        assert torch.equal(B, A)
+        B, _ = transform(A, transpose=True)
+        assert torch.equal(B, A.T)
+
+    def test_igemmlt(self):
+        shapeA_list = [(32, 64), (2, 32, 64)]
+        shapeB = (64, 64)
+        for shapeA in shapeA_list:
+            A = torch.rand(shapeA)
+            A_min, A_max = A.aminmax()
+            A_scale = torch.max(A_max, A_min.neg()) / 127
+            A_int8 = torch.round(A / A_scale).to(torch.int8)
+            B = torch.randn(shapeB)
+            B_min, B_max = B.aminmax(dim=1)
+            B_scale = torch.max(B_max, B_min.neg()) / 127
+            B_int8 = torch.round(B / B_scale.unsqueeze(-1)).to(torch.int8)
+            C, _ = igemmlt(A_int8, B_int8)
+            C_ref = A_int8.float() @ B_int8.float().T
+            C_ref = C_ref.to(torch.int32)
+            assert C.dtype == torch.int32
+            assert torch.equal(C, C_ref)
+            # Test with given out buffer
+            C_out = torch.zeros_like(C)
+            C, _ = igemmlt(A_int8, B_int8, out=C_out)
+            assert id(C) == id(C_out)
+            assert torch.equal(C_out, C_ref)
 
 
 if __name__ == '__main__':
