@@ -6,7 +6,9 @@ from int8_ops import (
     double_quant,
     transform,
     igemmlt,
+    mm_dequant,
 )
+import itertools
 
 
 class Test8bitOps(unittest.TestCase):
@@ -92,6 +94,36 @@ class Test8bitOps(unittest.TestCase):
             C, _ = igemmlt(A_int8, B_int8, out=C_out)
             assert id(C) == id(C_out)
             assert torch.equal(C_out, C_ref)
+
+    def test_mm_dequant(self):
+        shapeA_list = [(32, 64), (2, 32, 64)]
+        use_bias_list = [True, False]
+        shapeB = (64, 64)
+        cases = itertools.product(shapeA_list, use_bias_list)
+        for shapeA, use_bias in cases:
+            A = torch.rand(shapeA)
+            A_min, A_max = A.aminmax(dim=-1)
+            A_stats = torch.max(A_max, A_min.neg())
+            A_scale = A_stats / 127
+            A_int8 = torch.round(A / A_scale.unsqueeze(-1)).to(torch.int8)
+            B = torch.randn(shapeB)
+            B_min, B_max = B.aminmax(dim=-1)
+            B_stats = torch.max(B_max, B_min.neg())
+            B_scale = B_stats / 127
+            B_int8 = torch.round(B / B_scale.unsqueeze(-1)).to(torch.int8)
+            # Compute dtype is always float after torch.compile
+            comp_dtype = torch.float
+            out_dtype = mm_dequant.output_dtype
+            bias = torch.randn(shapeB[0]).to(comp_dtype) if use_bias else None
+            C_i32, _ = igemmlt(A_int8, B_int8)
+            C_dq = mm_dequant(C_i32, None, A_stats, B_stats, bias=bias)
+            A_scale_for_dq = A_stats.reshape(-1).unsqueeze(-1).to(comp_dtype) / 127
+            B_scale_for_dq = B_stats.reshape(-1).unsqueeze(0).to(comp_dtype) / 127
+            C_i32_reshaped = C_i32.reshape(-1, C_i32.size(-1))
+            C_dq_ref = C_i32_reshaped.to(comp_dtype) * A_scale_for_dq * B_scale_for_dq
+            C_dq_ref = C_dq_ref.to(comp_dtype) + (bias if use_bias else 0)
+            C_dq_ref = C_dq_ref.to(out_dtype)
+            assert torch.allclose(C_dq, C_dq_ref)
 
 
 if __name__ == '__main__':

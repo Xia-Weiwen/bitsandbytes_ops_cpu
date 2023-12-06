@@ -122,3 +122,46 @@ def igemmlt(A, B, SA=None, SB=None, out=None, Sout=None, dtype=torch.int32):
         out = C
 
     return out, Sout
+
+
+@torch.compile
+def mm_dequant(
+    A,
+    quant_state,
+    row_stats,
+    col_stats,
+    out=None,
+    new_row_stats=None,
+    new_col_stats=None,
+    bias=None
+):
+    """
+    Dequant and add bias
+    out = A_int32 * (scale_A, scale_B) / 127 * 127 + bias
+    Args:
+        A The output of int8 gemm, whose dtype is int32
+        quant_state Not used for CPU
+        row_stats Absolute max value of each row of input (A) of gemm
+        col_stats Absolute max value of each row of weight (B) of gemm
+        out Output buffer
+        new_row_stats Not used for CPU
+        new_col_stats Not used for CPU
+        bias Bias of linear
+    """
+    assert A.dtype == torch.int32
+    compute_dtype = torch.float
+    output_dtype = mm_dequant.output_dtype
+    out_shape = A.shape
+    if len(out_shape) == 3:
+        out_shape = (out_shape[0] * out_shape[1], out_shape[2])
+
+    A_reshaped = A.reshape(out_shape).to(compute_dtype)
+    row_stats = row_stats.reshape(-1).unsqueeze(-1).to(compute_dtype)
+    col_stats = col_stats.reshape(-1).unsqueeze(0).to(compute_dtype)
+    out = A_reshaped * row_stats * col_stats / (127 * 127)
+    if bias is not None:
+        out = out + bias.to(compute_dtype)
+    out = out.to(output_dtype)
+    return out
+
+mm_dequant.output_dtype = torch.bfloat16
