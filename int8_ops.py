@@ -15,7 +15,7 @@ def is_on_cpu(tensors):
     return on_cpu
 
 
-@torch.compile
+@torch.compile(dynamic=True, options={"fx_graph_cache": True})
 def double_quant(
     A, col_stats=None, row_stats=None, out_col=None, out_row=None, threshold=0.0
 ):
@@ -65,7 +65,7 @@ def double_quant(
     return out_row, out_col, row_stats, col_stats, coo_tensor
 
 
-@torch.compile
+@torch.compile(dynamic=True, options={"fx_graph_cache": True})
 def transform(A, to_order=None, from_order='row', out=None, transpose=False, state=None, ld=None):
     if transpose:
         if out is not None:
@@ -124,7 +124,7 @@ def igemmlt(A, B, SA=None, SB=None, out=None, Sout=None, dtype=torch.int32):
     return out, Sout
 
 
-@torch.compile
+@torch.compile(dynamic=True, options={"fx_graph_cache": True})
 def mm_dequant(
     A,
     quant_state,
