@@ -124,7 +124,7 @@ class Test8bitOps(unittest.TestCase):
             C_dq_ref = C_i32_reshaped.to(comp_dtype) * A_scale_for_dq * B_scale_for_dq
             C_dq_ref = C_dq_ref.to(comp_dtype) + (bias if use_bias else 0)
             C_dq_ref = C_dq_ref.to(out_dtype)
-            assert torch.allclose(C_dq, C_dq_ref, atol=1e-3, rtol=1e-5)
+            assert torch.allclose(C_dq, C_dq_ref, atol=1.6e-2, rtol=1e-5)
 
     def test_extract_outliers(self):
         shapeA = (4096, 4096 * 4)

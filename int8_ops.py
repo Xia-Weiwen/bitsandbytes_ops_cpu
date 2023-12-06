@@ -2,7 +2,7 @@ import torch
 import intel_extension_for_pytorch
 
 
-def is_on_cpu(tensors):
+def assert_on_cpu(tensors):
     on_cpu = True
     for t in tensors:
         if t is None: continue # NULL pointers are fine
@@ -19,7 +19,26 @@ def is_on_cpu(tensors):
 def double_quant(
     A, col_stats=None, row_stats=None, out_col=None, out_row=None, threshold=0.0
 ):
-    is_on_cpu([A, col_stats, row_stats, out_col, out_row])
+    """
+    Find absolute max valus of each row/column of a tensor, and symmetrically quantize it to int8.
+    If threshold > 0.0, only values <= threshold are counted. All outliers are zeroed out in
+    the original tensor and they are kept in COO format: (rows, cols, valus)
+    If threashold == 0.0, there are no outliers.
+    Args:
+        A The tensor to be analyzed and quantized.
+        col_stats Absolute max values of each column of A. If it is not None, use the values directly.
+            Otherwise, find the values.
+        row_stats Absolute max values of each row of A. If it is not None, use the values directly.
+            Otherwise, find the values.
+        out_col Output buffer for the result quantized per column if it is not None
+        out_row Output buffer for the result quantized per row if it is not None
+        threshold The threshold for finding outliers if it is > 0.0. Otherwise it has no effect.
+    Return:
+        A tuple of output quantized per row, output quantized per column, absolute max values of
+        each row of A, absolute max values of each column of A, outliers in COO format
+
+    """
+    assert_on_cpu([A, col_stats, row_stats, out_col, out_row])
     cols = A.shape[-1]
     if len(A.shape) == 3:
         rows = A.shape[0] * A.shape[1]
@@ -67,6 +86,12 @@ def double_quant(
 
 @torch.compile(dynamic=True, options={"fx_graph_cache": True})
 def transform(A, to_order=None, from_order='row', out=None, transpose=False, state=None, ld=None):
+    """
+    Transform tensor A to to_order. It is originally designed for CUDA.
+    For CPU, it returns the original tensor if transpose=False.
+    Otherwise, it returns the transpose of A
+    """
+    assert_on_cpu([A, out])
     if transpose:
         if out is not None:
             out.copy_(A.T)
@@ -81,8 +106,20 @@ def transform(A, to_order=None, from_order='row', out=None, transpose=False, sta
 
 
 def igemmlt(A, B, SA=None, SB=None, out=None, Sout=None, dtype=torch.int32):
-    assert A.device.type == "cpu"
-    assert B.device.type == "cpu"
+    """
+    Do GEMMM computation. Data type: int8 * int8 -> int32.
+    Args:
+        A Activation of linear, data type is int8
+        B Weight of linear, data type is int8
+        SA Not used for CPU
+        SB Not used for CPU
+        out Specified output tensor if it is not None
+        Sout Not used for CPU but returned as is
+        dtype Data type of output
+    Return:
+        A tuple of GEMM result in dtype and Sout
+    """
+    assert_on_cpu([A, B])
     assert A.dtype == torch.int8
     assert B.dtype == torch.int8
     if out is not None:
@@ -147,7 +184,10 @@ def mm_dequant(
         new_row_stats Not used for CPU
         new_col_stats Not used for CPU
         bias Bias of linear
+    Return:
+        The result
     """
+    assert_on_cpu([A, row_stats, col_stats, out, bias])
     assert A.dtype == torch.int32
     compute_dtype = torch.float
     output_dtype = mm_dequant.output_dtype
@@ -172,5 +212,5 @@ def extract_outliers(A, SA, idx):
     """
     Extract columns of A by idx
     """
-    assert A.device.type == "cpu"
+    assert_on_cpu([A])
     return A[:, idx].contiguous()
