@@ -165,3 +165,12 @@ def mm_dequant(
     return out
 
 mm_dequant.output_dtype = torch.bfloat16
+
+
+@torch.compile(dynamic=True, options={"fx_graph_cache": True})
+def extract_outliers(A, SA, idx):
+    """
+    Extract columns of A by idx
+    """
+    assert A.device.type == "cpu"
+    return A[:, idx].contiguous()
