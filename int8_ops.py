@@ -15,8 +15,7 @@ def assert_on_cpu(tensors):
     return on_cpu
 
 
-@torch.compile(dynamic=True, options={"fx_graph_cache": True})
-def double_quant(
+def double_quant_eager(
     A, col_stats=None, row_stats=None, out_col=None, out_row=None, threshold=0.0
 ):
     """
@@ -84,8 +83,7 @@ def double_quant(
     return out_row, out_col, row_stats, col_stats, coo_tensor
 
 
-@torch.compile(dynamic=True, options={"fx_graph_cache": True})
-def transform(A, to_order=None, from_order='row', out=None, transpose=False, state=None, ld=None):
+def transform_eager(A, to_order=None, from_order='row', out=None, transpose=False, state=None, ld=None):
     """
     Transform tensor A to to_order. It is originally designed for CUDA.
     For CPU, it returns the original tensor if transpose=False.
@@ -161,8 +159,7 @@ def igemmlt(A, B, SA=None, SB=None, out=None, Sout=None, dtype=torch.int32):
     return out, Sout
 
 
-@torch.compile(dynamic=True, options={"fx_graph_cache": True})
-def mm_dequant(
+def mm_dequant_eager(
     A,
     quant_state,
     row_stats,
@@ -190,7 +187,7 @@ def mm_dequant(
     assert_on_cpu([A, row_stats, col_stats, out, bias])
     assert A.dtype == torch.int32
     compute_dtype = torch.float
-    output_dtype = mm_dequant.output_dtype
+    output_dtype = mm_dequant_eager.output_dtype
     out_shape = A.shape
     if len(out_shape) == 3:
         out_shape = (out_shape[0] * out_shape[1], out_shape[2])
@@ -204,13 +201,18 @@ def mm_dequant(
     out = out.to(output_dtype)
     return out
 
-mm_dequant.output_dtype = torch.bfloat16
+mm_dequant_eager.output_dtype = torch.bfloat16
 
 
-@torch.compile(dynamic=True, options={"fx_graph_cache": True})
-def extract_outliers(A, SA, idx):
+def extract_outliers_eager(A, SA, idx):
     """
     Extract columns of A by idx
     """
     assert_on_cpu([A])
     return A[:, idx].contiguous()
+
+
+double_quant = torch.compile(double_quant_eager ,dynamic=True, options={"fx_graph_cache": True})
+transform = torch.compile(transform_eager, dynamic=True, options={"fx_graph_cache": True})
+mm_dequant = torch.compile(mm_dequant_eager, dynamic=True, options={"fx_graph_cache": True})
+extract_outliers = torch.compile(extract_outliers_eager, dynamic=True, options={"fx_graph_cache": True})
